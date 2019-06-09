@@ -2,12 +2,16 @@
 
 Given a set of hostnames, starting from the index page, Website Downloader will crawl through every webpage examining every link on them and saving them as local files. Links to external websites (with other hostnames) are not examined.
 
-Run with `website-downloader --hostnames example.org,www.example.org` to start the crawling process on `https://example.org/`, and include links to `www.example.org` in the crawling process.
+If you have the .NET Core SDK 3.0 (preview) installed you can run the project from the `website-downloader` folder with the `dotnet run -- --hostnames example.org,www.example.org``.
 
-Use `website-downloader --help` to list all program arguments you can pass:
+Otherwise, with a compiled binary, use `website-downloader --hostnames example.org,www.example.org`.
+
+This will start the crawling process on `https://example.org/` (the first of the hostnames), and visit links to both hostnames in the crawling process.
+
+Use `--help` to list all program arguments you can pass:
 
 ```
-Usage: website-downloader
+Usage:
 Flags:
   --target-folder <folder-path>
   --reuse-target-folder
