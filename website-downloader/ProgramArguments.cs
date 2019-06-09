@@ -61,8 +61,7 @@ namespace kcode.website_downloader
 
         public static void PrintUsage()
         {
-            var binName = (new FileInfo(Environment.GetCommandLineArgs()[0])).Name;
-            Console.WriteLine($"Usage: {binName}");
+            Console.WriteLine($"Usage:");
             Console.WriteLine("Flags:");
             Console.WriteLine("  --target-folder <folder-path>");
             Console.WriteLine("  --reuse-target-folder");
