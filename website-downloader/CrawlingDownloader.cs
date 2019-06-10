@@ -20,6 +20,7 @@ namespace kcode.website_downloader
         private bool ReuseTargetFolder { get; }
         private bool DeleteTargetFolderBeforeUse { get; }
         private bool Quiet { get; }
+        private bool VerifyDownloaded { get; }
 
         private Encoding Encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
         /// <summary>
@@ -45,6 +46,8 @@ namespace kcode.website_downloader
         private HashSet<string> HandledLocalSubpaths;
         private HashSet<string> WrittenFiles;
         public Dictionary<string, string> Redirects;
+        private HashSet<string> VerifiedMissing = new HashSet<string>();
+        private HashSet<string> VerifiedMismatch = new HashSet<string>();
 
         private CrawlingDownloader(ProgramArguments args)
         {
@@ -54,6 +57,7 @@ namespace kcode.website_downloader
             HostNames = args.Hostnames;
             RequestProtocol = args.RequestProtocol;
             Quiet = args.Quiet;
+            VerifyDownloaded = args.VerifyDownloaded;
 
             HttpClientHandler = new HttpClientHandler { AllowAutoRedirect = false, };
             HttpClient = new HttpClient(HttpClientHandler, disposeHandler: true);
@@ -120,8 +124,22 @@ namespace kcode.website_downloader
                 Console.WriteLine();
                 WriteCache();
             }
+
+            if (VerifyDownloaded)
+            {
+                Console.WriteLine($"Done checking downloaded files. Missing {VerifiedMismatch.Count}, mismates {VerifiedMismatch.Count}.");
+                var pathMissing = new FileInfo("missing.txt");
+                var pathMismatch = new FileInfo("mismatch.txt");
+                File.WriteAllLines(pathMissing.FullName, VerifiedMissing);
+                File.WriteAllLines(pathMismatch.FullName, VerifiedMismatch);
+                Console.WriteLine($"The filepaths of these files with issues have been saved to {pathMissing.FullName} and {pathMismatch}.");
+            }
+
             Console.WriteLine($"All done! Check the target folder for the results at {TargetFolder}");
         }
+        private Stream OpenRead(string filepath) => Open(filepath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        private Stream OpenWrite(string filepath) => Open(filepath, FileMode.Create, FileAccess.Write, FileShare.None);
+        private Stream Open(string filepath, FileMode fm, FileAccess fa, FileShare fs) => new FileStream(filepath, fm, fa, fs);
 
         private HashSet<string> GetUnhandledLocalSubpaths() => KnownLocalSubpaths.Except(HandledLocalSubpaths).ToHashSet();
 
@@ -165,6 +183,12 @@ namespace kcode.website_downloader
 
         private void ReadAlreadyWritten()
         {
+            if (VerifyDownloaded)
+            {
+                // When we want to verify the downloaded files, we do no parse them.
+                return;
+            }
+
             Debug.WriteLine("Reading already written webpage files…");
             DetermineAlreadyWrittenFiles(new DirectoryInfo(TargetFolder));
             ReadAlreadyWrittenFiles();
@@ -335,6 +359,21 @@ namespace kcode.website_downloader
                 return;
             }
 
+            if (VerifyDownloaded)
+            {
+                if (!File.Exists(filepath))
+                {
+                    VerifiedMissing.Add(filepath);
+                    return;
+                }
+                using var reader = File.OpenRead(filepath);
+                if (content.Length != reader.Length)
+                {
+                    VerifiedMismatch.Add(filepath);
+                    return;
+                }
+            }
+
             Debug.WriteLine($"Writing file {filepath}…");
             (new FileInfo(filepath)).Directory.Create();
             File.WriteAllText(filepath, content, Encoding);
@@ -347,6 +386,21 @@ namespace kcode.website_downloader
             if (WrittenFiles.Contains(filepath))
             {
                 return;
+            }
+
+            if (VerifyDownloaded)
+            {
+                if (!File.Exists(filepath))
+                {
+                    VerifiedMissing.Add(filepath);
+                    return;
+                }
+                using var reader = File.OpenRead(filepath);
+                if (binaryStream.Length != reader.Length)
+                {
+                    VerifiedMismatch.Add(filepath);
+                    return;
+                }
             }
 
             Debug.WriteLine($"Writing file {filepath}…");

@@ -43,6 +43,9 @@ namespace kcode.website_downloader
                         case "quiet":
                             progArgs.Quiet = true;
                             break;
+                        case "verify-downloaded":
+                            progArgs.VerifyDownloaded = true;
+                            break;
                         default:
                             Console.Error.WriteLine($"Invalid command line argument {arg}");
                             PrintUsage();
@@ -78,6 +81,7 @@ namespace kcode.website_downloader
         public string[] Hostnames { get; set; }
         public string RequestProtocol { get; set; } = "https";
         public bool Quiet { get; set; }
+        public bool VerifyDownloaded { get; set; }
 
         public ProgramArguments()
         {
