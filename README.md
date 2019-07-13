@@ -2,7 +2,7 @@
 
 Given a set of hostnames, starting from the index page, Website Downloader will crawl through every webpage examining every link on them and saving them as local files. Links to external websites (with other hostnames) are not examined.
 
-If you have the .NET Core SDK 3.0 (preview) installed you can run the project from the `website-downloader` folder with the `dotnet run -- --hostnames example.org,www.example.org``.
+If you have the .NET Core SDK 3.0 (preview) installed you can run the project from the `website-downloader` folder with the `dotnet run -- --hostnames example.org,www.example.org`.
 
 Otherwise, with a compiled binary, use `website-downloader --hostnames example.org,www.example.org`.
 
