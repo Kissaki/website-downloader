@@ -8,13 +8,30 @@ jobs:
       packageType: 'sdk'
       version: '3.x'
       includePreviewVersions: true
-  - script: dotnet restore
+  - task: DotNetCoreCLI@2
+    displayName: Restore
+    inputs:
+      command: restore
   - task: DotNetCoreCLI@2
     displayName: Build
     inputs:
       command: build
-      projects: '*/*.csproj'
       arguments: '--configuration Release'
+  - task: DotNetCoreCLI@2
+    displayName: Test
+    inputs:
+      command: test
+      arguments: '--configuration Release'
+  - task: DotNetCoreCLI@2
+    displayName: PublishDotNet
+    inputs:
+      command: publish
+      projects: 'website-downloader'
+      publishWebProjects: false
+      modifyOutputPath: false
+      arguments: '--configuration Release --self-contained --runtime win-x64 --output $(Build.ArtifactStagingDirectory)/website-downloader-win-x64'
+  - task: PublishBuildArtifacts@1
+    displayName: PublishArtifacts
 - job: Ubuntu
   pool:
     vmImage: 'ubuntu-latest'
@@ -24,10 +41,27 @@ jobs:
       packageType: 'sdk'
       version: '3.x'
       includePreviewVersions: true
-  - script: dotnet restore
+  - task: DotNetCoreCLI@2
+    displayName: Restore
+    inputs:
+      command: restore
   - task: DotNetCoreCLI@2
     displayName: Build
     inputs:
       command: build
-      projects: '*/*.csproj'
       arguments: '--configuration Release'
+  - task: DotNetCoreCLI@2
+    displayName: Test
+    inputs:
+      command: test
+      arguments: '--configuration Release'
+  - task: DotNetCoreCLI@2
+    displayName: PublishDotNet
+    inputs:
+      command: publish
+      projects: 'website-downloader'
+      publishWebProjects: false
+      modifyOutputPath: false
+      arguments: '--configuration Release --self-contained --runtime linux-x64 --output $(Build.ArtifactStagingDirectory)/website-downloader-linux-x64'
+  - task: PublishBuildArtifacts@1
+    displayName: PublishArtifacts
