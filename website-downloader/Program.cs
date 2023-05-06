@@ -1,18 +1,15 @@
-﻿using System;
+﻿namespace kcode.website_downloader;
 
-namespace kcode.website_downloader
+internal static class Program
 {
-    class Program
+    static int Main()
     {
-        static int Main()
+        Console.Title = "Website Downloader";
+        if (!ProgramArguments.Parse(out var args))
         {
-            Console.Title = "Website Downloader";
-            if (!ProgramArguments.Parse(out var args))
-            {
-                return 1;
-            }
-            CrawlingDownloader.Start(args);
-            return 0;
+            return 1;
         }
+        CrawlingDownloader.Start(args);
+        return 0;
     }
 }
