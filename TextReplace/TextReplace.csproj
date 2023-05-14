@@ -1,0 +1,14 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+    </PropertyGroup>
+    <ItemGroup>
+        <PackageReference Include="CommunityToolkit.Diagnostics" />
+        <PackageReference Include="Microsoft.Extensions.Logging.Console" />
+    </ItemGroup>
+    <ItemGroup>
+        <Using Include="System.Diagnostics.CodeAnalysis" />
+        <Using Include="CommunityToolkit.Diagnostics" />
+        <Using Include="Microsoft.Extensions.Logging" />
+    </ItemGroup>
+</Project>
