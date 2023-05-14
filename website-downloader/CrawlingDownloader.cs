@@ -1,90 +1,102 @@
-﻿using System.Collections.Generic;
-using System.Diagnostics;
-using System.Linq;
+﻿using System.Diagnostics.CodeAnalysis;
 using System.Net;
-using System.Net.Http;
-using System.Text;
-using System.Text.RegularExpressions;
 
 namespace kcode.website_downloader;
 
 internal sealed class CrawlingDownloader : IDisposable
 {
-    public static void Start(ProgramArguments args) => (new CrawlingDownloader(args)).StartCrawling();
-
     private readonly string RequestProtocol;
     private string[] HostNames { get; }
     private string TargetFolder { get; }
     private bool ReuseTargetFolder { get; }
     private bool DeleteTargetFolderBeforeUse { get; }
     private bool Quiet { get; }
-    private bool VerifyDownloaded { get; }
+    /// <summary>Verify only - no downloading</summary>
+    private bool OnlyVerifyDownloaded { get; }
 
     private readonly Encoding Encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
     /// <summary>
     /// For urls without a filename these query parameter keys will be mapped to filenames of the query key.
     /// </summary>
-    private readonly string[] QueryMappedKeys = new string[] { "page_id", "page", "cat", "feed", "author", "p", "post", "tag", "paged", };
+    //private readonly string[] QueryMappedKeys = new string[] { "page_id", "page", "cat", "feed", "author", "p", "post", "tag", "paged", "do", };
+    private readonly string[] QueryMappedKeys = new string[] { "do", };
     private readonly string[] ContentTypesToParse = new string[] { "text/html", };
-    private readonly List<string> IgnoredSubpaths = new()
+    private readonly string[] ParseFileExtensionsForHrefs = new string[] { ".html", };
+    private readonly string[] IgnoredSubpathsPrefixes = new string[]
     {
-        // Returns the standard homepage
-        "/community-blogs/",
-        // Returns the standard homepage; should be redirect to "/?page_id=578" (podcasts)
-        "/?option=com_podcast&amp;view=feed&amp;format=raw",
+        // Invision
+        "/calendar/",
+        "/online/",
+        // Activity
+        "/discover/",
+        "/search/",
+        "/startTopic/",
+        "/login/",
+        //"/profile/",
+    };
+
+    private readonly Regex[] IgnoredPaths = new Regex[]
+    {
+        new Regex("^/profile/[0-9]+-[a-zA-Z0-9]/content/.*"),
     };
 
     private bool IsDataChanged;
 
     private readonly HttpClient HttpClient;
+    private readonly ILoggerFactory _lFac;
+    private readonly ILogger _log;
 
-    private HashSet<string> KnownGlobalLinks;
-    private HashSet<string> KnownLocalSubpaths;
-    private HashSet<string> HandledLocalSubpaths;
-    private HashSet<string> WrittenFiles;
-    public Dictionary<string, string> Redirects;
+    private WebsiteData _data;
     private readonly HashSet<string> VerifiedMissing = new();
     private readonly HashSet<string> VerifiedMismatch = new();
 
-    private CrawlingDownloader(ProgramArguments args)
+    public CrawlingDownloader(ProgramArguments args, WebsiteData data, ILoggerFactory lFac)
     {
+        _lFac = lFac;
+        _log = lFac.CreateLogger<CrawlingDownloader>();
+        _data = data;
+
         TargetFolder = args.TargetFolder;
         ReuseTargetFolder = args.ReuseTargetFolder;
         DeleteTargetFolderBeforeUse = args.DeleteTargetFolderBeforeUse;
         HostNames = args.Hostnames;
         RequestProtocol = args.RequestProtocol;
         Quiet = args.Quiet;
-        VerifyDownloaded = args.VerifyDownloaded;
+        OnlyVerifyDownloaded = args.VerifyDownloaded;
 
         var httpClientHandler = new HttpClientHandler { AllowAutoRedirect = false, };
         HttpClient = new HttpClient(httpClientHandler, disposeHandler: true);
     }
 
-    private void StartCrawling()
+    public void StartCrawling()
     {
         if (DeleteTargetFolderBeforeUse)
         {
             DeleteTargetFolderBeforeUseImpl(out bool cancel);
             if (cancel) return;
         }
-        if (ReuseTargetFolder && Directory.Exists(TargetFolder))
-        {
-            Debug.WriteLine($"Reusing target folder {TargetFolder}");
-            ReadCache();
-            ReadAlreadyWritten();
-        }
-        else
-        {
-            InitNoCache();
-            Directory.CreateDirectory(TargetFolder);
-        }
 
+        if (ReuseTargetFolder)
+        {
+            UpdateStateWrittenFiles();
+            //ReadUrlsFromAlreadyWrittenFiles();
+        }
+        WriteCache();
+
+        _log.LogDebug("State:");
+        _log.LogDebug("{state}", _data.GetStateDescription());
+
+        // Starting point
         HandleSubpath("/");
 
         HashSet<string> unhandled;
         while ((unhandled = GetUnhandledLocalSubpaths()) != null && unhandled.Count != 0)
         {
-            Console.WriteLine($"Starting another round of checking known unchecked site page URLs ({unhandled.Count})…");
+            _log.LogInformation("Starting another round of checking known unchecked site page URLs ({unhandledCount})…", unhandled.Count);
+
+            _log.LogDebug("State:");
+            _log.LogDebug("{state}", _data.GetStateDescription());
+
             var placeCount = Math.Min(unhandled.Count, Math.Min(Console.BufferWidth - 12, 100));
             var i = 0;
             // Division with integer ceiling rounding to make sure we progress slower instead of faster (and bleed out)
@@ -93,7 +105,14 @@ internal sealed class CrawlingDownloader : IDisposable
             // As we modify the list while iterating through it, we make a copy for iteration
             foreach (var subpath in unhandled)
             {
-                HandleSubpath(subpath);
+                try
+                {
+                    HandleSubpath(subpath);
+                }
+                catch (Exception ex)
+                {
+                    _log.LogWarning("WARN: {exMessage}", ex.Message);
+                }
                 ++i;
                 if (i % factor == 0)
                 {
@@ -105,17 +124,17 @@ internal sealed class CrawlingDownloader : IDisposable
             WriteCache();
         }
 
-        if (VerifyDownloaded)
+        if (OnlyVerifyDownloaded)
         {
-            Console.WriteLine($"Done checking downloaded files. Missing {VerifiedMismatch.Count}, mismates {VerifiedMismatch.Count}.");
+            _log.LogInformation("Done checking downloaded files. Missing {VerifiedMismatchCount}, mismates {VerifiedMismatchCount}.", VerifiedMismatch.Count, VerifiedMismatch.Count);
             var pathMissing = new FileInfo("missing.txt");
             var pathMismatch = new FileInfo("mismatch.txt");
             File.WriteAllLines(pathMissing.FullName, VerifiedMissing);
             File.WriteAllLines(pathMismatch.FullName, VerifiedMismatch);
-            Console.WriteLine($"The filepaths of these files with issues have been saved to {pathMissing.FullName} and {pathMismatch}.");
+            _log.LogInformation("The filepaths of these files with issues have been saved to {pathMissingFullName} and {pathMismatch}.", pathMissing.FullName, pathMismatch);
         }
 
-        Console.WriteLine($"All done! Check the target folder for the results at {TargetFolder}");
+        _log.LogInformation("All done! Check the target folder for the results at {TargetFolder}", TargetFolder);
     }
 
     private void DeleteTargetFolderBeforeUseImpl(out bool cancel)
@@ -132,7 +151,7 @@ internal sealed class CrawlingDownloader : IDisposable
                 }
             }
 
-            Debug.WriteLine($"Removing existing target folder {TargetFolder}…");
+            _log.LogDebug("Removing existing target folder {TargetFolder}…", TargetFolder);
             Directory.Delete(TargetFolder, recursive: true);
         }
         cancel = false;
@@ -153,216 +172,200 @@ internal sealed class CrawlingDownloader : IDisposable
     private static Stream OpenWrite(string filepath) => Open(filepath, FileMode.Create, FileAccess.Write, FileShare.None);
     private static Stream Open(string filepath, FileMode fm, FileAccess fa, FileShare fs) => new FileStream(filepath, fm, fa, fs);
 
-    private HashSet<string> GetUnhandledLocalSubpaths() => KnownLocalSubpaths.Except(HandledLocalSubpaths).ToHashSet();
-
-    private void InitNoCache()
-    {
-        KnownGlobalLinks = new HashSet<string>();
-        KnownLocalSubpaths = new HashSet<string>();
-        HandledLocalSubpaths = new HashSet<string>();
-        WrittenFiles = new HashSet<string>();
-        Redirects = new Dictionary<string, string>();
-    }
-
-    private void ReadCache()
-    {
-        Debug.WriteLine("Reading persistent state cache…");
-        var cache = new Cache();
-        cache.Read(Cache.Type.KnownGlobal, out KnownGlobalLinks);
-        cache.Read(Cache.Type.KnownLocal, out KnownLocalSubpaths);
-        cache.Read(Cache.Type.Handled, out HandledLocalSubpaths);
-        cache.Read(Cache.Type.WrittenFiles, out WrittenFiles);
-        cache.Read(Cache.Type.Redirects, out Redirects);
-        IsDataChanged = false;
-    }
+    private HashSet<string> GetUnhandledLocalSubpaths() => _data.LocalUrlPaths.Except(_data.HandledLocalSubpaths).ToHashSet();
 
     private void WriteCache()
     {
-        if (!IsDataChanged)
-        {
-            return;
-        }
+        if (!IsDataChanged) return;
 
-        Debug.WriteLine("Writing persistent state cache…");
-        var cache = new Cache();
-        cache.Write(Cache.Type.KnownGlobal, KnownGlobalLinks);
-        cache.Write(Cache.Type.KnownLocal, KnownLocalSubpaths);
-        cache.Write(Cache.Type.Handled, HandledLocalSubpaths);
-        cache.Write(Cache.Type.WrittenFiles, WrittenFiles);
-        cache.Write(Cache.Type.Redirects, Redirects);
+        _log.LogDebug("Writing persistent state cache…");
+        new CacheStore().Write(_data);
         IsDataChanged = false;
     }
 
-    private void ReadAlreadyWritten()
+    private void UpdateStateWrittenFiles()
     {
-        if (VerifyDownloaded)
-        {
-            // When we want to verify the downloaded files, we do no parse them.
-            return;
-        }
+        // Verify only - no downloading
+        if (OnlyVerifyDownloaded) return;
 
-        Debug.WriteLine("Reading already written webpage files…");
-        DetermineAlreadyWrittenFiles(new DirectoryInfo(TargetFolder));
-        ReadAlreadyWrittenFiles();
+        _log.LogDebug("Reading already written webpage files…");
+        UpdateStateWrittenFiles(new DirectoryInfo(TargetFolder));
     }
 
-    private void DetermineAlreadyWrittenFiles(DirectoryInfo folder)
+    /// <summary>Determines already written files and fills <see cref="WrittenFiles"/></summary>
+    private void UpdateStateWrittenFiles(DirectoryInfo folder)
     {
-        foreach (var filepath in folder.GetFiles().Select(x => x.FullName))
-        {
-            if (!WrittenFiles.Contains(filepath))
-            {
-                WrittenFiles.Add(filepath);
-                IsDataChanged = true;
-            }
-        }
-        foreach (var di in folder.GetDirectories())
-        {
-            DetermineAlreadyWrittenFiles(di);
-        }
-    }
+        var actual = folder.GetFiles("*", SearchOption.AllDirectories).Select(x => x.FullName);
 
-    private void ReadAlreadyWrittenFiles()
-    {
-        var missing = new HashSet<string>();
-        foreach (var filepath in WrittenFiles)
+        var missing = _data.WrittenFiles.Except(actual);
+        foreach (var fpath in missing)
         {
-            if (!File.Exists(filepath))
-            {
-                missing.Add(filepath);
-                continue;
-            }
-            var content = File.ReadAllText(filepath, Encoding);
-            HandleContent(content);
+            _log.LogDebug("Written file is missing at {Filepath} - discarding", fpath);
         }
-        foreach (var filepath in missing)
+
+        var additional = actual.Except(_data.WrittenFiles);
+        foreach (var fpath in additional)
         {
-            Debug.WriteLine($"Previously written file is missing. Discarding knowledge about {filepath}");
-            WrittenFiles.Remove(filepath);
+            _log.LogDebug("Written file is not known at {Filepath} - adding", fpath);
+        }
+
+        if (!actual.SequenceEqual(additional))
+        {
+            _data.WrittenFiles = actual.ToHashSet();
             IsDataChanged = true;
         }
     }
 
-    private void HandleContent(string content)
+    private void ReadUrlsFromAlreadyWrittenFiles()
     {
-        var rHref = new Regex(@"href=""(?<url>[^""]*)""");
-        var hrefs = rHref.Matches(content);
-        foreach (Match href in hrefs.Cast<Match>())
+        var filesToParse = _data.WrittenFiles.Where(filepath => ParseFileExtensionsForHrefs.Contains(new FileInfo(filepath).Extension)).ToArray();
+        foreach (var filepath in filesToParse)
         {
-            var url = href.Groups["url"].Value;
-            HandleNewUrl(url);
+            var content = File.ReadAllText(filepath, Encoding);
+            var urls = UrlFinder.FindUrls(content);
+            foreach (var url in urls) HandleNewUrl(url);
         }
     }
 
     private void HandleNewUrl(string url)
     {
-        KnownGlobalLinks.Add(url);
+        _data.FoundUrls.Add(url);
         IsDataChanged = true;
 
-        if (url.Length == 0 || url.StartsWith("#"))
-        {
-            return;
-        }
+        if (url.Length == 0) return;
+        if (url.StartsWith("#")) return;
 
+        ExtractSubpath(url);
+    }
+
+    private void ExtractSubpath(string url)
+    {
         var r = new Regex(@"^(?:(?<protocol>[a-zA-Z0-9]+)\:)?(?:\/\/)?(?<host>[^\/]+)?(?:\:(?<port>[0-9]+))?(?<subpath>.*)$");
         var match = r.Match(url);
-        if (!match.Success)
-        {
-            throw new NotImplementedException($"Unexpected url format could not be understood: {url}");
-        }
+        if (!match.Success) throw new NotImplementedException($"Unexpected url format could not be understood: {url}");
+
         var host = match.Groups["host"].Value;
         // A link without a host is a relative link. As we only visit content from our host under test the relative links are always links to the host under test.
         var isLocal = host.Length == 0 || HostNames.Contains(host);
-        if (!isLocal)
-        {
-            return;
-        }
-        KnownLocalSubpaths.Add(match.Groups["subpath"].Value);
+        if (!isLocal) return;
+
+        _data.LocalUrlPaths.Add(match.Groups["subpath"].Value);
         IsDataChanged = true;
     }
 
     private void HandleSubpath(string subpath)
     {
-        if (!subpath.StartsWith("/"))
+        if (subpath.Length == 0)
         {
-            throw new ArgumentException($"{nameof(subpath)} must be absolute (start with a slash '/')");
-        }
-
-        if (HandledLocalSubpaths.Contains(subpath))
-        {
+            _data.HandledLocalSubpaths.Add(subpath);
+            IsDataChanged = true;
+            _log.LogWarning("Ignoring empty subpath {subpath}", subpath);
             return;
         }
 
-        if (IgnoredSubpaths.Any(ignoredPrefix => subpath.StartsWith(ignoredPrefix)))
+        if (!subpath.StartsWith("/")) throw new ArgumentException($"subpath must be absolute (start with a slash '/')");
+
+        if (_data.HandledLocalSubpaths.Contains(subpath))
         {
-            HandledLocalSubpaths.Add(subpath);
+            _log.LogDebug("Ignoring already handled subpath {subpath}", subpath);
+            return;
+        }
+
+        var ignoredPrefix = IgnoredSubpathsPrefixes.FirstOrDefault(ignoredPrefix => subpath.StartsWith(ignoredPrefix));
+        if (ignoredPrefix != null)
+        {
+            _log.LogDebug("Ignoring subpath with ignored prefix; {ignoredPrefix} in {subpath}", ignoredPrefix, subpath);
+            _data.HandledLocalSubpaths.Add(subpath);
             IsDataChanged = true;
             return;
         }
 
-        Debug.WriteLine($"Checking {subpath}…");
+        foreach (var filter in IgnoredPaths)
+        {
+            if (filter.Match(subpath).Success)
+            {
+                _log.LogDebug("Ignoring subpath {Subpath} that matches an ignore-path-regex", subpath);
+                _data.HandledLocalSubpaths.Add(subpath);
+                IsDataChanged = true;
+                return;
+            }
+        }
 
-        HandledLocalSubpaths.Add(subpath);
+        _log.LogDebug("Checking {subpath}…", subpath);
+
+        _data.HandledLocalSubpaths.Add(subpath);
         IsDataChanged = true;
 
         var filepath = GetFilepathFor(subpath);
 
-        if (WrittenFiles.Contains(filepath))
+        if (_data.WrittenFiles.Contains(filepath))
         {
-            if (!HandledLocalSubpaths.Contains(subpath))
+            if (!_data.HandledLocalSubpaths.Contains(subpath))
             {
-                HandleContent(File.ReadAllText(filepath, Encoding));
+                var existingContent = File.ReadAllText(filepath, Encoding);
+                var foundUrls = UrlFinder.FindUrls(existingContent);
+                foreach (var foundUrl in foundUrls) HandleNewUrl(foundUrl);
             }
-            return;
+            _log.LogWarning("Trying to write this file a second time. Probably a URL mapping to filepath that is ambiguous. For {filepath}", filepath);
             //throw new InvalidOperationException($"Trying to write this file a second time. Probably a URL mapping to filepath that is ambiguous. For {filepath}");
+            return;
         }
 
         var url = $"{RequestProtocol}://{HostNames[0]}{subpath}";
-        Debug.WriteLine($"Downloading {url}…");
-        HttpResponseMessage resp;
-        try
-        {
-            resp = HttpClient.GetAsync(url).Result;
-        }
-        catch (WebException e)
-        {
-            Console.Error.WriteLine($"Ignoring {url} because it returned {e.Message}");
-            return;
-        }
-        if (resp.Headers.Location != null)
-        {
-            HandleNewUrl(resp.Headers.Location.AbsoluteUri);
-        }
+        if (!TryRequestWeb(url, out var resp)) return;
+
+        // Recognize Location header URL even if the status code is not a redirect - https://developer.mozilla.org/en-US/docs/web/http/headers/location
+        if (resp.Headers.Location != null) HandleNewUrl(resp.Headers.Location.AbsoluteUri);
+
         var isRedirect = IsRedirect(resp.StatusCode);
         if (isRedirect)
         {
             if (resp.Headers.Location == null)
             {
-                Console.Error.WriteLine($"WARN: Redirect without Location header in response for {url}");
+                _log.LogWarning("WARN: Redirect without Location header in response for {url}", url);
                 throw new NotImplementedException("Redirect without Location header in response for ");
             }
             else
             {
+                _log.LogDebug("Identified as redirect {subpath}", subpath);
                 // Redirect pages can have content as well.
                 // Or they can be webserver redirects.
                 // For now cache but otherwise ignore them (do not write them; this could lead to a /fragment -> /fragment/ redirect to try and produce a fragment directory and file)
-                Redirects.Add(subpath, resp.Headers.Location!.AbsoluteUri);
+                _data.Redirects.Add(subpath, resp.Headers.Location!.AbsoluteUri);
                 IsDataChanged = true;
                 return;
             }
         }
+
         var content = resp.Content;
         var isHtml = content.Headers.ContentType != null && ContentTypesToParse.Contains(content.Headers.ContentType.MediaType);
         if (isHtml)
         {
             var text = content.ReadAsStringAsync().Result;
             WriteHtmlFile(filepath, text);
-            HandleContent(text);
+            var foundUrls = UrlFinder.FindUrls(text);
+            foreach (var foundUrl in foundUrls) HandleNewUrl(foundUrl);
         }
         else
         {
             using var binaryStream = content.ReadAsStreamAsync().Result;
             WriteBinaryFile(filepath, binaryStream);
+        }
+
+        bool TryRequestWeb(string url, [NotNullWhen(returnValue: true)] out HttpResponseMessage? resp)
+        {
+            _log.LogDebug("Downloading {url}…", url);
+            try
+            {
+                resp = HttpClient.GetAsync(url).Result;
+                return true;
+            }
+            catch (WebException e)
+            {
+                _log.LogWarning("Fetch failed of {url} with exception {eMessage}", url, e.Message);
+                resp = null;
+                return false;
+            }
         }
     }
 
@@ -371,9 +374,9 @@ internal sealed class CrawlingDownloader : IDisposable
     private void WriteHtmlFile(string filepath, string content)
     {
         // File was already written
-        if (WrittenFiles.Contains(filepath)) return;
+        if (_data.WrittenFiles.Contains(filepath)) return;
 
-        if (VerifyDownloaded)
+        if (OnlyVerifyDownloaded)
         {
             if (!File.Exists(filepath))
             {
@@ -388,21 +391,21 @@ internal sealed class CrawlingDownloader : IDisposable
             }
         }
 
-        Debug.WriteLine($"Writing file {filepath}…");
-        new FileInfo(filepath).Directory.Create();
+        _log.LogDebug("Writing file {filepath}…", filepath);
+        new FileInfo(filepath).Directory!.Create();
         File.WriteAllText(filepath, content, Encoding);
-        WrittenFiles.Add(filepath);
+        _data.WrittenFiles.Add(filepath);
         IsDataChanged = true;
     }
 
     private void WriteBinaryFile(string filepath, Stream binaryStream)
     {
-        if (WrittenFiles.Contains(filepath))
+        if (_data.WrittenFiles.Contains(filepath))
         {
             return;
         }
 
-        if (VerifyDownloaded)
+        if (OnlyVerifyDownloaded)
         {
             if (!File.Exists(filepath))
             {
@@ -417,8 +420,8 @@ internal sealed class CrawlingDownloader : IDisposable
             }
         }
 
-        Debug.WriteLine($"Writing file {filepath}…");
-        new FileInfo(filepath).Directory.Create();
+        _log.LogDebug("Writing file {filepath}…", filepath);
+        new FileInfo(filepath).Directory!.Create();
         using var writer = File.OpenWrite(filepath);
         binaryStream.CopyTo(writer);
     }
@@ -476,6 +479,7 @@ internal sealed class CrawlingDownloader : IDisposable
                 }
                 else
                 {
+                    //_log.LogWarning("Ignoring url with query parameter {subpath}", subpath);
                     throw new NotImplementedException($"No filename and unhandled query filename mapping for subpath {subpath}");
                 }
             }

@@ -1,10 +1,12 @@
 ﻿namespace kcode.website_downloader;
 
-class ProgramArguments
+internal class ProgramArguments
 {
-    public static bool Parse(out ProgramArguments progArgs)
+    public static bool Parse(ILoggerFactory lFac, out ProgramArguments progArgs)
     {
-        progArgs = new ProgramArguments();
+        var log = lFac.CreateLogger<ProgramArguments>();
+
+        progArgs = new ProgramArguments(lFac);
 
         var cliArgs = Environment.GetCommandLineArgs();
         for (var i = 1; i < cliArgs.Length; ++i)
@@ -50,7 +52,7 @@ class ProgramArguments
             }
             else
             {
-                Console.Error.WriteLine($"Invalid command line argument {arg}");
+                log.LogError("Invalid command line argument {arg}", arg);
                 return false;
             }
         }
@@ -60,48 +62,49 @@ class ProgramArguments
 
     public static void PrintUsage()
     {
-        Console.WriteLine($"Usage:");
-        Console.WriteLine("Flags:");
-        Console.WriteLine("  --target-folder <folder-path>");
-        Console.WriteLine("  --reuse-target-folder");
-        Console.WriteLine("  --delete-target-folder");
-        Console.WriteLine(@"  --hostnames <hostname1,hostname2>");
-        Console.WriteLine(@"    e.g. --hostnames ""example.org,www.example.org,example.com""");
-        Console.WriteLine("  --request-protocol [http|https]");
-        Console.WriteLine("  --quiet");
+        Console.Write("""
+            Usage:
+            Flags:
+              --target-folder <folder-path>
+              --reuse-target-folder
+              --delete-target-folder
+              --hostnames <hostname1,hostname2>
+                e.g. --hostnames "example.org,www.example.org,example.com"
+              --request-protocol [http|https]
+              --quiet
+            """);
     }
 
     public string TargetFolder { get; set; } = "downloaded";
     public bool ReuseTargetFolder { get; set; }
     public bool DeleteTargetFolderBeforeUse { get; set; }
-    public string[] Hostnames { get; set; } = Array.Empty<string>();
+    public string[] Hostnames { get; set; }
     public string RequestProtocol { get; set; } = "https";
     public bool Quiet { get; set; }
     public bool VerifyDownloaded { get; set; }
 
-    public ProgramArguments()
+    private readonly ILogger<ProgramArguments> _log;
+
+    public ProgramArguments(ILoggerFactory lFac)
     {
+        _log = lFac.CreateLogger<ProgramArguments>();
     }
 
     public bool Validate()
     {
         if (Hostnames.Length == 0)
         {
-            Error($"No hostnames specified");
+            _log.LogError("Missing hostnames");
+            PrintUsage();
             return false;
         }
         if (Directory.Exists(TargetFolder) && !ReuseTargetFolder && !DeleteTargetFolderBeforeUse)
         {
-            Error($"The specified target directory already exists and neither --reuse-target-folder nor --delete-target-folder was specified. --target-folder '{TargetFolder}'.");
+            _log.LogError("The specified target directory already exists and neither --reuse-target-folder nor --delete-target-folder was specified. --target-folder '{TargetFolder}'.", TargetFolder);
+            PrintUsage();
             return false;
         }
 
         return true;
-    }
-
-    private static void Error(string err)
-    {
-        Console.Error.WriteLine(err);
-        PrintUsage();
     }
 }
