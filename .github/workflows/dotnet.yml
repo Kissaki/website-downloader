@@ -9,10 +9,7 @@ on:
 
 jobs:
   build:
-    strategy:
-      matrix:
-        runs-on: [ "windows-latest", "ubuntu-latest" ]
-    runs-on: ${{ matrix.runs-on }}
+    runs-on: windows-latest
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
