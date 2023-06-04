@@ -1,6 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
     <PropertyGroup>
         <OutputType>Exe</OutputType>
+        <PublishSingleFile>true</PublishSingleFile>
         <RootNamespace>kcode.website_downloader</RootNamespace>
     </PropertyGroup>
     <ItemGroup>
