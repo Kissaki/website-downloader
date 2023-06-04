@@ -1,0 +1,45 @@
+name: .NET Build and Publish
+
+on:
+  push:
+    branches: [ "master" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "master" ]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        runs-on: [ "windows-latest", "ubuntu-latest" ]
+    runs-on: ${{ matrix.runs-on }}
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+    - name: Install .NET Core
+      uses: actions/setup-dotnet@v3
+      with:
+        dotnet-version: 6.0.x
+    - name: dotnet test
+      run: dotnet test --property:Configuration=Release
+    - name: publish win-x64
+      run: dotnet publish website-downloader --property:Configuration=Release --os win --arch x64 --output publish/win-x64
+    - name: publish linux-x64
+      run: dotnet publish website-downloader --property:Configuration=Release --os linux --arch x64 --output publish/linux-x64
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        path: publish/**
+        if-no-files-found: error
+    - name: Publish GitHub Release
+      if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
+      run: hub release create \
+        --attach publish/win-x64/website-downloader.exe \
+        --attach publish/win-x64/website-downloader.pdb \
+        --attach publish/linux-x64/website-downloader \
+        --attach publish/linux-x64/website-downloader.pdb \
+        --message "${{ github.ref_name }}" "${{ github.ref_name }}"
