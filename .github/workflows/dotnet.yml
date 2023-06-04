@@ -34,9 +34,10 @@ jobs:
         if-no-files-found: error
     - name: Publish GitHub Release
       if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
-      run: hub release create \
-        --attach publish/win-x64/website-downloader.exe \
-        --attach publish/win-x64/website-downloader.pdb \
-        --attach publish/linux-x64/website-downloader \
-        --attach publish/linux-x64/website-downloader.pdb \
+      run: >
+        hub release create
+        --attach publish/win-x64/website-downloader.exe
+        --attach publish/win-x64/website-downloader.pdb
+        --attach publish/linux-x64/website-downloader
+        --attach publish/linux-x64/website-downloader.pdb
         --message "${{ github.ref_name }}" "${{ github.ref_name }}"
