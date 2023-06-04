@@ -39,5 +39,5 @@ jobs:
         --attach publish/win-x64/website-downloader.exe
         --attach publish/win-x64/website-downloader.pdb
         --attach publish/linux-x64/website-downloader
-        --attach publish/linux-x64/website-downloader.pdb
+        --attach publish/linux-x64/website-downloader.pdb#website-downloader.linux.pdb
         --message "${{ github.ref_name }}" "${{ github.ref_name }}"
